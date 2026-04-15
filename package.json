@@ -5,6 +5,7 @@
   "description": "DRISHTI peer-teaching education platform demo with a Node backend.",
   "main": "server.js",
   "scripts": {
+    "build": "node scripts/prepare-vercel.js",
     "start": "node server.js",
     "dev": "node server.js"
   },

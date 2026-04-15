@@ -180,7 +180,7 @@ function renderDashboard() {
 
       <div>
         <section class="panel brand-panel">
-          <img src="/public/assets/drishti-logo.png" alt="DRISHTI vision of opportunities" />
+          <img src="/assets/drishti-logo.png" alt="DRISHTI vision of opportunities" />
           <div>
             <p class="eyebrow">Vision of opportunities</p>
             <h2>Peer teaching with intelligent access.</h2>

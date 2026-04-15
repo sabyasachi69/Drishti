@@ -6,7 +6,7 @@ const crypto = require("crypto");
 const PORT = Number(process.env.PORT || 4323);
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, "public");
-const DATA_DIR = path.join(ROOT, "data");
+const DATA_DIR = process.env.VERCEL ? "/tmp" : path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "drishti-db.json");
 
 const MIME_TYPES = {
@@ -851,6 +851,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`DRISHTI is running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`DRISHTI is running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = {
+  handleApi,
+  loadDatabase,
+  seedDatabase
+};
