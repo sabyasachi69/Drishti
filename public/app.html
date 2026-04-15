@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DRISHTI App</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/public/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/">
+        <span>DRISHTI</span>
+        <strong>.</strong>
+      </a>
+      <div class="profile-card" id="profileCard">
+        <div class="skeleton-line wide"></div>
+        <div class="skeleton-line"></div>
+      </div>
+      <nav class="app-nav" aria-label="DRISHTI app">
+        <a href="#dashboard" data-route="dashboard" class="active">Dashboard</a>
+        <a href="#discover" data-route="discover">Discover</a>
+        <a href="#forums" data-route="forums">Peer Forum</a>
+        <a href="#groups" data-route="groups">Study Groups</a>
+        <a href="#library" data-route="library">Offline Library</a>
+        <a href="#analytics" data-route="analytics">Analytics</a>
+        <a href="#contact" data-route="contact">Contact</a>
+      </nav>
+      <button class="ghost full" id="syncButton" type="button">Sync platform APIs</button>
+    </aside>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Smart Education Workspace</p>
+          <h1 id="pageTitle">Dashboard</h1>
+        </div>
+        <div class="topbar-actions">
+          <a class="button secondary" href="/">Landing Page</a>
+          <button class="button" id="quickPlanButton" type="button">Generate study plan</button>
+        </div>
+      </header>
+
+      <section class="status-strip" id="statusStrip" aria-live="polite">
+        <div>Loading DRISHTI workspace...</div>
+      </section>
+
+      <section id="appView" class="view" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <template id="courseCardTemplate">
+    <article class="course-card">
+      <div class="course-top">
+        <div>
+          <p class="eyebrow provider"></p>
+          <h3></h3>
+        </div>
+        <span class="fit-pill"></span>
+      </div>
+      <p class="muted description"></p>
+      <div class="tag-row tags"></div>
+      <div class="course-meta"></div>
+      <div class="card-actions">
+        <button class="button small complete" type="button">Mark complete</button>
+        <button class="ghost small offline" type="button">Save offline</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="/public/app.js" defer></script>
+</body>
+</html>

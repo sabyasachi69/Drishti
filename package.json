@@ -1,0 +1,14 @@
+{
+  "name": "drishti-learning-platform",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DRISHTI peer-teaching education platform demo with a Node backend.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
