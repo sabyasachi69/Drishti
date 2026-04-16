@@ -29,6 +29,10 @@ body {
   background: linear-gradient(180deg, #fbfaf7 0%, var(--paper) 100%);
 }
 
+[hidden] {
+  display: none !important;
+}
+
 button, input, select, textarea {
   font: inherit;
 }
@@ -89,6 +93,12 @@ a {
   color: #aab5ca;
   font-size: 0.85rem;
   line-height: 1.5;
+}
+
+.local-mode-note {
+  margin-top: 0.4rem !important;
+  color: var(--gold) !important;
+  font-weight: 800;
 }
 
 .profile-metrics {
@@ -573,6 +583,10 @@ textarea:focus {
 
 .auth-switch {
   margin-top: 1rem;
+}
+
+.local-mode-banner {
+  margin: 1rem 0;
 }
 
 .setup-panel h2 {

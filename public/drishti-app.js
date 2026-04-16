@@ -1,6 +1,8 @@
 const state = {
   authMode: "login",
   authUser: null,
+  localMode: false,
+  localModeReason: "",
   profile: null,
   courses: [],
   filteredCourses: null,
@@ -18,6 +20,8 @@ const state = {
   selectedForumId: null,
   setupError: ""
 };
+
+const LOCAL_DB_KEY = "drishti.local.workspace.v1";
 
 const routes = {
   dashboard: "Dashboard",
@@ -66,7 +70,7 @@ function bindEvents() {
       return;
     }
     await loadBootstrap(true);
-    showNotice("Workspace refreshed from the database.", "success");
+    showNotice(state.localMode ? "Workspace refreshed from this browser." : "Workspace refreshed from the database.", "success");
   }));
 
   logoutButton.addEventListener("click", () => runAction(async () => {
@@ -81,6 +85,7 @@ function bindEvents() {
 
 async function loadSession() {
   setStatusLoading("Checking your DRISHTI session...");
+  await detectStorageMode();
   try {
     const data = await api("/api/auth/me");
     state.authUser = data.user;
@@ -96,6 +101,19 @@ async function loadSession() {
       return;
     }
     renderSetup(error.message || "DRISHTI could not start.");
+  }
+}
+
+async function detectStorageMode() {
+  if (state.localMode) return;
+  try {
+    const response = await fetch("/api/health", { credentials: "same-origin" });
+    const data = await response.json();
+    if (data && data.databaseConfigured === false) {
+      enableLocalMode("Cloud database is not connected.");
+    }
+  } catch (error) {
+    // If health is unreachable, continue with the normal API path so errors stay visible.
   }
 }
 
@@ -119,6 +137,10 @@ async function loadRecommendations() {
 }
 
 async function api(path, options = {}) {
+  if (state.localMode) {
+    return localApi(path, options);
+  }
+
   const response = await fetch(path, {
     credentials: "same-origin",
     headers: {
@@ -133,6 +155,10 @@ async function api(path, options = {}) {
     error.status = response.status;
     error.code = payload.code;
     error.payload = payload;
+    if (error.code === "SETUP_REQUIRED") {
+      enableLocalMode(error.message);
+      return localApi(path, options);
+    }
     throw error;
   }
   return payload;
@@ -148,7 +174,9 @@ async function runAction(action) {
 
 function handleApiError(error) {
   if (error.code === "SETUP_REQUIRED") {
-    renderSetup(error.message);
+    enableLocalMode(error.message);
+    renderAuth();
+    showNotice("Cloud database is not connected yet. Local workspace mode is active.", "notice");
     return;
   }
   if (error.status === 401) {
@@ -163,6 +191,8 @@ function handleApiError(error) {
 function resetWorkspace() {
   Object.assign(state, {
     authUser: null,
+    localMode: state.localMode,
+    localModeReason: state.localModeReason,
     profile: null,
     courses: [],
     filteredCourses: null,
@@ -191,8 +221,8 @@ function renderChrome() {
 function renderProfile() {
   if (!state.profile) {
     profileCard.innerHTML = `
-      <h2>Welcome</h2>
-      <p>Sign in or create an account to use DRISHTI.</p>
+      <h2>${state.localMode ? "Local workspace" : "Welcome"}</h2>
+      <p>${state.localMode ? "Data is saved in this browser until cloud database setup is finished." : "Sign in or create an account to use DRISHTI."}</p>
     `;
     return;
   }
@@ -201,6 +231,7 @@ function renderProfile() {
     <h2>${escapeHtml(state.profile.name)}</h2>
     <p>${escapeHtml(state.profile.grade || "Learner")} - ${escapeHtml(state.profile.district || "No district saved")}</p>
     <p>${escapeHtml(state.profile.languages.join(", ") || "English")}</p>
+    ${state.localMode ? `<p class="local-mode-note">Local browser mode</p>` : ""}
     <div class="profile-metrics">
       <span>${state.analytics?.totals?.xp || 0}<small>XP earned</small></span>
       <span>${state.profile.streak || 0}<small>day streak</small></span>
@@ -216,6 +247,9 @@ function renderStatusStrip() {
     <div><b>${state.offlinePacks.length || 0}</b><span>Offline packs</span></div>
     <div><b>${totals.studyGroups || 0}</b><span>Study groups</span></div>
   `;
+  if (state.localMode) {
+    statusStrip.insertAdjacentHTML("afterbegin", `<div><b>Local</b><span>Cloud DB not connected</span></div>`);
+  }
 }
 
 function renderAuth() {
@@ -223,11 +257,11 @@ function renderAuth() {
   logoutButton.hidden = true;
   setActiveNav();
   profileCard.innerHTML = `
-    <h2>DRISHTI Account</h2>
-    <p>Your learning data is saved only after you sign in.</p>
+    <h2>${state.localMode ? "Local workspace" : "DRISHTI Account"}</h2>
+    <p>${state.localMode ? "This browser can run DRISHTI while Vercel database setup is pending." : "Your learning data is saved only after you sign in."}</p>
   `;
   statusStrip.innerHTML = `
-    <div><b>1</b><span>Account</span></div>
+    <div><b>${state.localMode ? "Local" : "1"}</b><span>${state.localMode ? "Browser storage" : "Account"}</span></div>
     <div><b>2</b><span>Profile</span></div>
     <div><b>3</b><span>Tasks</span></div>
     <div><b>4</b><span>Recommendations</span></div>
@@ -265,7 +299,7 @@ function renderSetup(message) {
 
 function renderRoute() {
   if (!state.profile) {
-    if (state.setupError) renderSetup(state.setupError);
+    if (state.setupError && !state.localMode) renderSetup(state.setupError);
     else renderAuth();
     return;
   }
@@ -302,8 +336,9 @@ function authTemplate() {
   return `
     <section class="auth-layout">
       <div class="auth-panel panel">
-        <p class="eyebrow">${isRegister ? "New account" : "Welcome back"}</p>
+        <p class="eyebrow">${state.localMode ? "Local mode" : (isRegister ? "New account" : "Welcome back")}</p>
         <h2>${isRegister ? "Create your learner workspace." : "Continue your saved learning path."}</h2>
+        ${state.localMode ? `<div class="notice local-mode-banner">Cloud database is not connected on Vercel yet, so this workspace is saved in this browser. The same screens use Postgres automatically once DATABASE_URL is added.</div>` : ""}
         <form id="authForm" class="form-grid">
           <input type="hidden" name="mode" value="${state.authMode}" />
           ${isRegister ? `
@@ -332,9 +367,9 @@ function authTemplate() {
         </div>
       </div>
       <div class="panel">
-        <p class="eyebrow">Stored for real</p>
-        <h2>No temporary learner profile.</h2>
-        <p class="muted">Your account creates database rows for the user, session, first task, progress, and future recommendations.</p>
+        <p class="eyebrow">${state.localMode ? "Usable now" : "Stored for real"}</p>
+        <h2>${state.localMode ? "Basic learning flows are available." : "No temporary learner profile."}</h2>
+        <p class="muted">${state.localMode ? "Create an account here to test courses, tasks, groups, forums, packs, and recommendations immediately. Connect Postgres to make it cloud-backed." : "Your account creates database rows for the user, session, first task, progress, and future recommendations."}</p>
       </div>
     </section>
   `;
@@ -542,7 +577,7 @@ function renderForums() {
       <section class="panel">
         <p class="eyebrow">Peer forum</p>
         <h2>Ask, explain, and support peers.</h2>
-        <p class="muted">Posts are stored in the database and count toward learning activity.</p>
+        <p class="muted">${state.localMode ? "Posts are saved in this browser and count toward local learning activity." : "Posts are stored in the database and count toward learning activity."}</p>
         <div class="tag-row">
           ${state.forums.map((forum) => `
             <button class="ghost small" data-forum-select="${escapeHtml(forum.id)}" type="button">${escapeHtml(forum.subject)}</button>
@@ -740,7 +775,7 @@ function renderContact() {
     <div class="view-grid">
       <section class="contact-panel panel">
         <p class="eyebrow">Contact</p>
-        <h2>Send a real database-backed message.</h2>
+        <h2>${state.localMode ? "Save a local contact note." : "Send a real database-backed message."}</h2>
         <form id="contactForm" class="form-grid">
           <div class="field">
             <label for="contactName">Name</label>
@@ -774,8 +809,8 @@ function renderContact() {
       </section>
       <section class="panel">
         <p class="eyebrow">Stored fields</p>
-        <h2>Contacts table</h2>
-        <p class="muted">Messages include account id when signed in, name, email, organization, interest, message, and created timestamp.</p>
+        <h2>${state.localMode ? "Local contact log" : "Contacts table"}</h2>
+        <p class="muted">${state.localMode ? "This message is saved in this browser until the Vercel database is connected." : "Messages include account id when signed in, name, email, organization, interest, message, and created timestamp."}</p>
       </section>
     </div>
   `;
@@ -1239,6 +1274,610 @@ async function handleSubmit(event) {
     event.target.reset();
     showNotice(data.nextStep, "success");
   }
+}
+
+function enableLocalMode(message) {
+  state.localMode = true;
+  state.localModeReason = message || "Cloud database is not connected.";
+  state.setupError = "";
+  loadLocalDb();
+}
+
+function localError(status, message, code = "LOCAL_ERROR") {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  throw error;
+}
+
+function localId(prefix) {
+  const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${id}`;
+}
+
+function defaultLocalDb() {
+  return {
+    sessionUserId: "",
+    users: [],
+    courses: [
+      {
+        id: "course-peer-teaching-foundations",
+        title: "Peer Teaching Foundations",
+        provider: "DRISHTI Starter Catalog",
+        level: "All Levels",
+        languages: ["English", "Hindi", "Odia"],
+        durationHours: 6,
+        offlineReady: true,
+        rating: 4.7,
+        enrollments: 0,
+        tags: ["Peer Teaching", "Communication", "Collaboration"],
+        skills: ["Explaining", "Question Design", "Feedback"],
+        description: "Turn one learned concept into a clear peer explanation."
+      },
+      {
+        id: "course-ai-project-readiness",
+        title: "AI Project Readiness",
+        provider: "DRISHTI Starter Catalog",
+        level: "Beginner",
+        languages: ["English", "Hindi"],
+        durationHours: 8,
+        offlineReady: false,
+        rating: 4.6,
+        enrollments: 0,
+        tags: ["AI", "Projects", "Problem Solving"],
+        skills: ["Prompting", "Model Thinking", "Ethics"],
+        description: "Prepare to build explainable AI project ideas."
+      },
+      {
+        id: "course-math-bridge",
+        title: "Mathematics Bridge",
+        provider: "DRISHTI Starter Catalog",
+        level: "Intermediate",
+        languages: ["English", "Hindi", "Odia"],
+        durationHours: 14,
+        offlineReady: true,
+        rating: 4.8,
+        enrollments: 0,
+        tags: ["Mathematics", "Exam Prep", "Foundations"],
+        skills: ["Algebra", "Functions", "Practice Planning"],
+        description: "Repair weak algebra and function concepts before harder topics."
+      },
+      {
+        id: "course-science-offline",
+        title: "Science Offline Study Pack",
+        provider: "DRISHTI Starter Catalog",
+        level: "Beginner",
+        languages: ["Hindi", "Odia"],
+        durationHours: 10,
+        offlineReady: true,
+        rating: 4.5,
+        enrollments: 0,
+        tags: ["Science", "Offline Learning", "Foundations"],
+        skills: ["Experiment Notes", "Concept Recall", "Diagrams"],
+        description: "Low-bandwidth study planning for science fundamentals."
+      },
+      {
+        id: "course-career-ready",
+        title: "Career Ready Skills Lab",
+        provider: "DRISHTI Starter Catalog",
+        level: "All Levels",
+        languages: ["English", "Hindi", "Odia"],
+        durationHours: 9,
+        offlineReady: true,
+        rating: 4.6,
+        enrollments: 0,
+        tags: ["Career", "Communication", "Portfolio"],
+        skills: ["Resume Basics", "Interview Practice", "Teamwork"],
+        description: "Convert learning progress into portfolio notes and interview practice."
+      }
+    ],
+    resources: [
+      { id: "resource-goal-map", title: "Learning Goal Map", type: "Template", language: "English", sizeMb: 0.2, tags: ["Planning", "Goals"], offlineReady: true },
+      { id: "resource-peer-rubric", title: "Peer Teaching Feedback Rubric", type: "Template", language: "Hindi", sizeMb: 0.3, tags: ["Peer Teaching", "Feedback"], offlineReady: true },
+      { id: "resource-offline-notes", title: "Offline Study Notes Checklist", type: "Checklist", language: "Odia", sizeMb: 0.2, tags: ["Offline Learning", "Study Plan"], offlineReady: true }
+    ],
+    forums: [
+      { id: "forum-learning-help", subject: "Learning Help", description: "Ask doubts, explain concepts, and turn confusion into peer teaching moments.", posts: [] },
+      { id: "forum-projects", subject: "Projects", description: "Discuss student projects, evidence, datasets, presentations, and build plans.", posts: [] },
+      { id: "forum-career", subject: "Career Skills", description: "Practice portfolio notes, interviews, communication, and next-step planning.", posts: [] }
+    ],
+    groups: [
+      {
+        id: localId("group"),
+        name: "Peer Teaching Circle",
+        subject: "Peer Teaching",
+        mentor: "Peer-led",
+        meeting: "Sat 5:00 PM",
+        capacity: 18,
+        progress: 0,
+        docs: ["Peer teaching rubric", "Shared notes"],
+        tasks: ["Choose one concept", "Teach it to one peer", "Collect feedback"],
+        members: [],
+        createdAt: new Date().toISOString()
+      },
+      {
+        id: localId("group"),
+        name: "Math Bridge Sprint",
+        subject: "Mathematics",
+        mentor: "Peer-led",
+        meeting: "Sun 6:00 PM",
+        capacity: 20,
+        progress: 0,
+        docs: ["Practice tracker", "Formula checklist"],
+        tasks: ["Finish algebra repair", "Solve five function questions", "Review peer notes"],
+        members: [],
+        createdAt: new Date().toISOString()
+      }
+    ],
+    progress: [],
+    tasks: [],
+    offlinePacks: [],
+    events: [],
+    contacts: []
+  };
+}
+
+function loadLocalDb() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOCAL_DB_KEY) || "null");
+    if (saved && Array.isArray(saved.courses) && Array.isArray(saved.users)) return saved;
+  } catch (error) {
+    localStorage.removeItem(LOCAL_DB_KEY);
+  }
+  const db = defaultLocalDb();
+  saveLocalDb(db);
+  return db;
+}
+
+function saveLocalDb(db) {
+  localStorage.setItem(LOCAL_DB_KEY, JSON.stringify(db));
+}
+
+async function localBody(options) {
+  if (!options.body) return {};
+  if (typeof options.body === "string") return JSON.parse(options.body || "{}");
+  return options.body;
+}
+
+async function localPasswordHash(value) {
+  const text = String(value || "");
+  if (!crypto.subtle) return btoa(unescape(encodeURIComponent(text)));
+  const bytes = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function localPublicUser(user, events = []) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    role: user.role || "Student",
+    grade: user.grade || "",
+    district: user.district || "",
+    level: user.level || "Beginner",
+    languages: user.languages || ["English"],
+    goals: user.goals || [],
+    interests: user.interests || [],
+    pace: user.pace || "Balanced",
+    offlineFirst: Boolean(user.offlineFirst),
+    createdAt: user.createdAt,
+    xp: events.reduce((sum, event) => sum + Number(event.xp || 0), 0),
+    streak: localStreak(events)
+  };
+}
+
+function localCurrentUser(db) {
+  return db.users.find((user) => user.id === db.sessionUserId) || null;
+}
+
+function localRequireUser(db) {
+  const user = localCurrentUser(db);
+  if (!user) localError(401, "Please sign in.", "AUTH_REQUIRED");
+  return user;
+}
+
+function localCourseWithProgress(course, progress) {
+  return {
+    ...course,
+    language: course.languages,
+    progressStatus: progress?.status || null,
+    progress: Number(progress?.progress || 0),
+    completedAt: progress?.completedAt || null
+  };
+}
+
+function localSignals(value) {
+  return String(value || "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+}
+
+function localCourseMatches(course, query) {
+  const parts = localSignals(query);
+  if (!parts.length) return true;
+  const text = [course.title, course.provider, course.level, course.description, ...(course.tags || []), ...(course.skills || []), ...(course.languages || [])].join(" ").toLowerCase();
+  return parts.every((part) => text.includes(part));
+}
+
+function localScoreCourse(course, user, progress) {
+  let score = Math.round(Number(course.rating || 0) * 10);
+  const reasons = [];
+  const learnerSignals = [...(user.goals || []), ...(user.interests || [])].map((item) => String(item).toLowerCase());
+  const courseSignals = [course.title, course.level, ...(course.tags || []), ...(course.skills || [])].map((item) => String(item).toLowerCase());
+
+  for (const learnerSignal of learnerSignals) {
+    if (!learnerSignal) continue;
+    const learnerWords = localSignals(learnerSignal);
+    const matched = courseSignals.some((signal) => {
+      const words = localSignals(signal);
+      if (learnerSignal.length <= 2 || learnerWords.length === 1) return words.includes(learnerSignal);
+      return signal.includes(learnerSignal) || learnerSignal.includes(signal);
+    });
+    if (matched) {
+      score += 16;
+      reasons.push(`Matches ${learnerSignal}`);
+    }
+  }
+
+  if ((course.languages || []).some((language) => (user.languages || []).includes(language))) {
+    score += 14;
+    reasons.push("Available in your language set");
+  }
+  if (user.offlineFirst && course.offlineReady) {
+    score += 12;
+    reasons.push("Works offline");
+  }
+  if (course.level === user.level || course.level === "All Levels") {
+    score += 10;
+    reasons.push("Right difficulty");
+  }
+  if (progress?.status === "enrolled" || progress?.status === "in_progress") {
+    score += 18;
+    reasons.push("Already in your learning path");
+  }
+  if (progress?.status === "completed") score -= 1000;
+
+  return {
+    ...course,
+    score,
+    fit: Math.min(99, Math.max(52, score)),
+    reasons: [...new Set(reasons)].slice(0, 3)
+  };
+}
+
+function localRecommendations(db, user, courses, tasks) {
+  const progressByCourse = new Map(db.progress.filter((item) => item.userId === user.id).map((item) => [item.courseId, item]));
+  const recommendations = courses
+    .map((course) => localScoreCourse(course, user, progressByCourse.get(course.id)))
+    .filter((course) => course.score > -100)
+    .sort((a, b) => b.score - a.score);
+  const upcomingTasks = tasks
+    .filter((task) => task.status !== "done")
+    .sort((a, b) => new Date(a.dueAt || "2999-01-01") - new Date(b.dueAt || "2999-01-01") || Number(b.priority || 0) - Number(a.priority || 0));
+  const suggestedTasks = recommendations[0] && !progressByCourse.has(recommendations[0].id)
+    ? [{ title: `Start ${recommendations[0].title}`, courseId: recommendations[0].id, reason: recommendations[0].reasons[0] || "Good fit for your profile", priority: 3 }]
+    : [];
+  const dailyPlan = [
+    ...upcomingTasks.slice(0, 3).map((task, index) => ({ type: "task", day: index + 1, title: task.title, detail: task.description, dueAt: task.dueAt, action: "Finish task" })),
+    ...recommendations.slice(0, Math.max(0, 3 - Math.min(3, upcomingTasks.length))).map((course, index) => ({ type: "course", day: upcomingTasks.length + index + 1, title: course.title, detail: course.description, courseId: course.id, action: "Enroll or continue" }))
+  ].slice(0, 3);
+  return { recommendations, upcomingTasks, suggestedTasks, dailyPlan };
+}
+
+function localStreak(events) {
+  const days = new Set(events.map((event) => String(event.createdAt || "").slice(0, 10)));
+  let streak = 0;
+  for (let offset = 0; offset < 365; offset += 1) {
+    const day = new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
+    if (days.has(day)) {
+      streak += 1;
+      continue;
+    }
+    if (offset === 0) continue;
+    break;
+  }
+  return streak;
+}
+
+function localAnalytics(db, user, workspacePieces) {
+  const events = db.events.filter((event) => event.userId === user.id);
+  const tasks = db.tasks.filter((task) => task.userId === user.id);
+  const progress = db.progress.filter((item) => item.userId === user.id);
+  const groups = db.groups.filter((group) => group.members.includes(user.id));
+  const forumPosts = db.forums.reduce((count, forum) => count + forum.posts.filter((post) => post.userId === user.id).length, 0);
+  const xp = events.reduce((sum, event) => sum + Number(event.xp || 0), 0);
+  const daily = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(Date.now() - (6 - index) * 86400000);
+    const key = date.toISOString().slice(0, 10);
+    return {
+      day: date.toLocaleDateString("en-US", { weekday: "short" }),
+      xp: events.filter((event) => String(event.createdAt || "").startsWith(key)).reduce((sum, event) => sum + Number(event.xp || 0), 0)
+    };
+  });
+  const completedCourses = progress.filter((item) => item.status === "completed").length;
+  const completedTasks = tasks.filter((task) => task.status === "done").length;
+  const packs = db.offlinePacks.filter((pack) => pack.userId === user.id);
+  return {
+    streak: localStreak(events),
+    totals: {
+      xp,
+      completedCourses,
+      completedTasks,
+      pendingTasks: tasks.filter((task) => task.status !== "done").length,
+      savedResources: packs.length,
+      forumPosts,
+      studyGroups: groups.length
+    },
+    daily,
+    badges: [
+      completedCourses ? "Course Finisher" : null,
+      completedTasks > 2 ? "Task Closer" : null,
+      forumPosts ? "Peer Voice" : null,
+      packs.length ? "Offline Ready" : null,
+      groups.length ? "Study Circle" : null
+    ].filter(Boolean),
+    nextBestAction: workspacePieces.recommendations[0] || null
+  };
+}
+
+function localWorkspace(db, rawUser) {
+  const userEvents = db.events.filter((event) => event.userId === rawUser.id);
+  const user = localPublicUser(rawUser, userEvents);
+  const progress = db.progress.filter((item) => item.userId === user.id);
+  const progressByCourse = new Map(progress.map((item) => [item.courseId, item]));
+  const courses = db.courses.map((course) => localCourseWithProgress(course, progressByCourse.get(course.id)));
+  const tasks = db.tasks.filter((task) => task.userId === user.id).sort((a, b) => String(a.status).localeCompare(String(b.status)) || new Date(a.dueAt || "2999-01-01") - new Date(b.dueAt || "2999-01-01"));
+  const recs = localRecommendations(db, user, courses, tasks);
+  const forums = db.forums.map((forum) => ({ ...forum, members: new Set(forum.posts.map((post) => post.userId)).size }));
+  const offlinePacks = db.offlinePacks.filter((pack) => pack.userId === user.id);
+  const analytics = localAnalytics(db, user, recs);
+  const profile = { ...user, xp: analytics.totals.xp, streak: analytics.streak };
+  const leaderboard = db.users.map((learner) => {
+    const events = db.events.filter((event) => event.userId === learner.id);
+    return {
+      id: learner.id,
+      name: learner.name,
+      district: learner.district || "",
+      xp: events.reduce((sum, event) => sum + Number(event.xp || 0), 0),
+      completedCourses: db.progress.filter((item) => item.userId === learner.id && item.status === "completed").length
+    };
+  }).sort((a, b) => b.xp - a.xp);
+  return {
+    profile,
+    platforms: [],
+    courses,
+    courseProgress: progress,
+    tasks,
+    recommendations: recs.recommendations.slice(0, 6),
+    upcomingTasks: recs.upcomingTasks,
+    suggestedTasks: recs.suggestedTasks,
+    studyPlan: recs.dailyPlan,
+    forums,
+    groups: db.groups,
+    resources: db.resources,
+    offlinePacks,
+    analytics,
+    leaderboard
+  };
+}
+
+async function localApi(path, options = {}) {
+  const db = loadLocalDb();
+  const url = new URL(path, location.origin);
+  const method = options.method || "GET";
+  const parts = url.pathname.split("/").filter(Boolean);
+
+  if (method === "GET" && url.pathname === "/api/auth/me") {
+    const user = localCurrentUser(db);
+    if (!user) localError(401, "Please sign in.", "AUTH_REQUIRED");
+    return { user: localPublicUser(user, db.events.filter((event) => event.userId === user.id)) };
+  }
+
+  if (method === "POST" && url.pathname === "/api/auth/register") {
+    const body = await localBody(options);
+    const email = String(body.email || "").trim().toLowerCase();
+    if (!body.name || !email || String(body.password || "").length < 8) localError(400, "Name, email, and 8 character password are required.", "VALIDATION_ERROR");
+    if (db.users.some((user) => user.email === email)) localError(409, "An account with this email already exists.", "EMAIL_EXISTS");
+    const user = {
+      id: localId("user"),
+      name: String(body.name).trim(),
+      email,
+      passwordHash: await localPasswordHash(body.password),
+      role: "Student",
+      grade: body.grade || "",
+      district: body.district || "",
+      level: body.level || "Beginner",
+      languages: body.languages?.length ? body.languages : ["English"],
+      goals: body.goals || [],
+      interests: body.interests || [],
+      pace: body.pace || "Balanced",
+      offlineFirst: Boolean(body.offlineFirst),
+      createdAt: new Date().toISOString()
+    };
+    db.users.push(user);
+    db.sessionUserId = user.id;
+    db.tasks.push({
+      id: localId("task"),
+      userId: user.id,
+      courseId: null,
+      title: "Set your DRISHTI learning goals",
+      description: "Add goals, interests, and language preferences so recommendations can work from your real profile.",
+      dueAt: new Date(Date.now() + 86400000).toISOString(),
+      status: "pending",
+      priority: 3,
+      source: "system",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    });
+    saveLocalDb(db);
+    return { user: localPublicUser(user) };
+  }
+
+  if (method === "POST" && url.pathname === "/api/auth/login") {
+    const body = await localBody(options);
+    const email = String(body.email || "").trim().toLowerCase();
+    const user = db.users.find((item) => item.email === email);
+    if (!user || user.passwordHash !== await localPasswordHash(body.password)) localError(401, "Email or password is incorrect.", "INVALID_CREDENTIALS");
+    db.sessionUserId = user.id;
+    saveLocalDb(db);
+    return { user: localPublicUser(user, db.events.filter((event) => event.userId === user.id)) };
+  }
+
+  if (method === "POST" && url.pathname === "/api/auth/logout") {
+    db.sessionUserId = "";
+    saveLocalDb(db);
+    return { ok: true };
+  }
+
+  if (method === "POST" && url.pathname === "/api/contact") {
+    const body = await localBody(options);
+    db.contacts.unshift({ id: localId("contact"), ...body, userId: db.sessionUserId || null, createdAt: new Date().toISOString() });
+    saveLocalDb(db);
+    return { nextStep: "Message saved in this browser. Connect Postgres to store contacts in the cloud." };
+  }
+
+  const user = localRequireUser(db);
+
+  if (method === "GET" && url.pathname === "/api/bootstrap") return localWorkspace(db, user);
+  if (method === "GET" && url.pathname === "/api/recommendations") {
+    const workspace = localWorkspace(db, user);
+    return {
+      recommendations: workspace.recommendations,
+      upcomingTasks: workspace.upcomingTasks,
+      suggestedTasks: workspace.suggestedTasks,
+      studyPlan: workspace.studyPlan
+    };
+  }
+  if (method === "GET" && url.pathname === "/api/courses") {
+    const query = url.searchParams.get("query") || "";
+    const level = url.searchParams.get("level") || "";
+    const language = url.searchParams.get("language") || "";
+    const mode = url.searchParams.get("mode") || "";
+    let courses = localWorkspace(db, user).courses.filter((course) => localCourseMatches(course, query));
+    if (level) courses = courses.filter((course) => course.level === level || course.level === "All Levels");
+    if (language) courses = courses.filter((course) => course.languages.includes(language));
+    if (mode === "offline") courses = courses.filter((course) => course.offlineReady);
+    return { courses };
+  }
+  if (method === "POST" && parts[0] === "api" && parts[1] === "courses" && parts[3] === "enroll") {
+    const course = db.courses.find((item) => item.id === parts[2]);
+    if (!course) localError(404, "Course not found.", "NOT_FOUND");
+    let progress = db.progress.find((item) => item.userId === user.id && item.courseId === course.id);
+    if (!progress) {
+      progress = { userId: user.id, courseId: course.id, status: "enrolled", progress: 0, updatedAt: new Date().toISOString() };
+      db.progress.push(progress);
+      course.enrollments += 1;
+      db.tasks.push({ id: localId("task"), userId: user.id, courseId: course.id, title: `Start ${course.title}`, description: "Study the first section and write one note you can explain to a peer.", dueAt: new Date(Date.now() + 2 * 86400000).toISOString(), status: "pending", priority: 2, source: "course", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      db.events.push({ id: localId("event"), userId: user.id, type: "course_enrolled", courseId: course.id, xp: 20, createdAt: new Date().toISOString() });
+    }
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "POST" && url.pathname === "/api/profile") {
+    const body = await localBody(options);
+    Object.assign(user, {
+      name: body.name || user.name,
+      grade: body.grade ?? user.grade,
+      district: body.district ?? user.district,
+      level: body.level || user.level,
+      languages: body.languages?.length ? body.languages : user.languages,
+      goals: body.goals || [],
+      interests: body.interests || [],
+      pace: body.pace || user.pace,
+      offlineFirst: Boolean(body.offlineFirst)
+    });
+    saveLocalDb(db);
+    const workspace = localWorkspace(db, user);
+    return { profile: workspace.profile, analytics: workspace.analytics, recommendations: workspace.recommendations, studyPlan: workspace.studyPlan };
+  }
+  if (method === "POST" && url.pathname === "/api/tasks") {
+    const body = await localBody(options);
+    if (!body.title) localError(400, "Task title is required.", "VALIDATION_ERROR");
+    db.tasks.push({ id: localId("task"), userId: user.id, courseId: body.courseId || null, title: body.title, description: body.description || "", dueAt: body.dueAt || null, status: "pending", priority: Number(body.priority || 1), source: body.source || "user", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "POST" && parts[0] === "api" && parts[1] === "tasks" && parts[3] === "complete") {
+    const task = db.tasks.find((item) => item.id === parts[2] && item.userId === user.id);
+    if (!task) localError(404, "Task not found.", "NOT_FOUND");
+    task.status = "done";
+    task.updatedAt = new Date().toISOString();
+    db.events.push({ id: localId("event"), userId: user.id, type: "task_completed", taskId: task.id, xp: 35, createdAt: new Date().toISOString() });
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "POST" && parts[0] === "api" && parts[1] === "forums" && parts[3] === "posts") {
+    const body = await localBody(options);
+    const forum = db.forums.find((item) => item.id === parts[2]);
+    if (!forum || !body.text) localError(400, "Forum and post text are required.", "VALIDATION_ERROR");
+    forum.posts.unshift({ id: localId("post"), userId: user.id, author: user.name, role: user.role || "Student", text: body.text, likes: 0, replies: [], createdAt: new Date().toISOString() });
+    db.events.push({ id: localId("event"), userId: user.id, type: "forum_post", forumId: forum.id, xp: 40, createdAt: new Date().toISOString() });
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "POST" && parts[0] === "api" && parts[1] === "posts" && parts[3] === "react") {
+    const post = db.forums.flatMap((forum) => forum.posts).find((item) => item.id === parts[2]);
+    if (!post) localError(404, "Post not found.", "NOT_FOUND");
+    post.likes += 1;
+    saveLocalDb(db);
+    return { post: { id: post.id, likes: post.likes } };
+  }
+  if (method === "POST" && url.pathname === "/api/groups") {
+    const body = await localBody(options);
+    if (!body.name || !body.subject) localError(400, "Group name and subject are required.", "VALIDATION_ERROR");
+    const group = { id: localId("group"), name: body.name, subject: body.subject, mentor: body.mentor || "Peer-led", meeting: body.meeting || "Flexible", capacity: Number(body.capacity || 10), progress: 0, tasks: ["Set group goal", "Share first resource", "Run one peer teaching session"], docs: ["Shared notes"], members: [user.id], createdAt: new Date().toISOString() };
+    db.groups.unshift(group);
+    db.events.push({ id: localId("event"), userId: user.id, type: "group_joined", groupId: group.id, xp: 50, createdAt: new Date().toISOString() });
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "POST" && parts[0] === "api" && parts[1] === "groups" && parts[3] === "join") {
+    const group = db.groups.find((item) => item.id === parts[2]);
+    if (!group) localError(404, "Group not found.", "NOT_FOUND");
+    if (!group.members.includes(user.id)) {
+      if (group.members.length >= group.capacity) localError(409, "Group is full.", "GROUP_FULL");
+      group.members.push(user.id);
+      db.events.push({ id: localId("event"), userId: user.id, type: "group_joined", groupId: group.id, xp: 50, createdAt: new Date().toISOString() });
+    }
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "POST" && url.pathname === "/api/offline-packs") {
+    const body = await localBody(options);
+    const course = db.courses.find((item) => item.id === body.courseId);
+    if (!course) localError(404, "Course not found.", "NOT_FOUND");
+    db.offlinePacks.unshift({ id: localId("pack"), userId: user.id, courseId: course.id, resourceIds: body.resourceIds || [], language: body.language || user.languages[0] || "English", expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(), createdAt: new Date().toISOString() });
+    db.events.push({ id: localId("event"), userId: user.id, type: "offline_pack_created", courseId: course.id, xp: 35, createdAt: new Date().toISOString() });
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "POST" && url.pathname === "/api/learning-events") {
+    const body = await localBody(options);
+    if (body.type === "course_completed") {
+      let progress = db.progress.find((item) => item.userId === user.id && item.courseId === body.courseId);
+      if (!progress) {
+        progress = { userId: user.id, courseId: body.courseId, status: "completed", progress: 100, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        db.progress.push(progress);
+      } else {
+        progress.status = "completed";
+        progress.progress = 100;
+        progress.completedAt = progress.completedAt || new Date().toISOString();
+        progress.updatedAt = new Date().toISOString();
+      }
+      db.tasks.filter((task) => task.userId === user.id && task.courseId === body.courseId).forEach((task) => {
+        task.status = "done";
+        task.updatedAt = new Date().toISOString();
+      });
+    }
+    db.events.push({ id: localId("event"), userId: user.id, type: body.type || "activity", courseId: body.courseId || null, taskId: body.taskId || null, xp: Number(body.xp || 25), createdAt: new Date().toISOString() });
+    saveLocalDb(db);
+    return localWorkspace(db, user);
+  }
+  if (method === "GET" && url.pathname === "/api/analytics") {
+    const workspace = localWorkspace(db, user);
+    return { analytics: workspace.analytics, leaderboard: workspace.leaderboard };
+  }
+
+  localError(404, "Local route not found.", "NOT_FOUND");
 }
 
 function downloadPack(packId) {
