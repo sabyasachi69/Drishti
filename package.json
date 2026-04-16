@@ -2,13 +2,18 @@
   "name": "drishti-learning-platform",
   "version": "1.0.0",
   "private": true,
-  "description": "DRISHTI peer-teaching education platform demo with a Node backend.",
+  "description": "DRISHTI peer-teaching education platform with authentication, Postgres storage, and recommendations.",
   "scripts": {
     "build": "node scripts/prepare-vercel.js",
+    "db:migrate": "node scripts/migrate.js",
     "start": "node local-server.js",
     "dev": "node local-server.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.2",
+    "pg": "^8.20.0"
   }
 }

@@ -1,9 +1,13 @@
 const state = {
+  authMode: "login",
+  authUser: null,
   profile: null,
-  platforms: [],
   courses: [],
   filteredCourses: null,
   recommendations: [],
+  tasks: [],
+  upcomingTasks: [],
+  suggestedTasks: [],
   forums: [],
   groups: [],
   resources: [],
@@ -11,16 +15,19 @@ const state = {
   analytics: null,
   leaderboard: [],
   studyPlan: [],
-  selectedForumId: "forum-math"
+  selectedForumId: null,
+  setupError: ""
 };
 
 const routes = {
   dashboard: "Dashboard",
-  discover: "Discover",
+  courses: "Courses",
+  tasks: "Tasks",
   forums: "Peer Forum",
   groups: "Study Groups",
   library: "Offline Library",
   analytics: "Analytics",
+  profile: "Profile",
   contact: "Contact"
 };
 
@@ -28,113 +35,252 @@ const appView = document.querySelector("#appView");
 const pageTitle = document.querySelector("#pageTitle");
 const profileCard = document.querySelector("#profileCard");
 const statusStrip = document.querySelector("#statusStrip");
+const refreshButton = document.querySelector("#refreshButton");
+const logoutButton = document.querySelector("#logoutButton");
+const quickPlanButton = document.querySelector("#quickPlanButton");
 
 document.addEventListener("DOMContentLoaded", init);
 
 function init() {
   bindEvents();
-  loadBootstrap();
+  loadSession();
 }
 
 function bindEvents() {
   window.addEventListener("hashchange", renderRoute);
 
-  document.querySelector("#quickPlanButton").addEventListener("click", async () => {
+  quickPlanButton.addEventListener("click", () => runAction(async () => {
+    if (!state.profile) {
+      renderAuth();
+      return;
+    }
     await loadRecommendations();
-    location.hash = "#discover";
-    showNotice("Your AI-ranked study plan is ready.", "success");
-  });
+    location.hash = "#dashboard";
+    renderRoute();
+    showNotice("Recommendations refreshed from your saved profile, tasks, and course progress.", "success");
+  }));
 
-  document.querySelector("#syncButton").addEventListener("click", async () => {
+  refreshButton.addEventListener("click", () => runAction(async () => {
+    if (!state.profile) {
+      await loadSession();
+      return;
+    }
     await loadBootstrap(true);
-    showNotice("Platform APIs synced with the latest local backend data.", "success");
-  });
+    showNotice("Workspace refreshed from the database.", "success");
+  }));
 
-  document.addEventListener("click", handleClick);
-  document.addEventListener("submit", handleSubmit);
+  logoutButton.addEventListener("click", () => runAction(async () => {
+    await api("/api/auth/logout", { method: "POST", body: "{}" });
+    resetWorkspace();
+    renderAuth();
+  }));
+
+  document.addEventListener("click", (event) => runAction(() => handleClick(event)));
+  document.addEventListener("submit", (event) => runAction(() => handleSubmit(event)));
 }
 
-async function loadBootstrap(showLoading = false) {
-  if (showLoading) setStatusLoading("Syncing DRISHTI data...");
+async function loadSession() {
+  setStatusLoading("Checking your DRISHTI session...");
   try {
-    const data = await api("/api/bootstrap?learnerId=learner-odisha");
-    Object.assign(state, data);
-    state.filteredCourses = null;
-    state.selectedForumId = state.forums[0]?.id || state.selectedForumId;
-    renderChrome();
-    renderRoute();
+    const data = await api("/api/auth/me");
+    state.authUser = data.user;
+    await loadBootstrap();
   } catch (error) {
-    appView.innerHTML = `<div class="notice">${escapeHtml(error.message)}</div>`;
+    resetWorkspace();
+    if (error.code === "SETUP_REQUIRED") {
+      renderSetup(error.message);
+      return;
+    }
+    if (error.status === 401) {
+      renderAuth();
+      return;
+    }
+    renderSetup(error.message || "DRISHTI could not start.");
   }
 }
 
-async function loadRecommendations(query = "") {
-  const data = await api(`/api/recommendations?learnerId=${state.profile.id}&query=${encodeURIComponent(query)}`);
-  state.recommendations = data.recommendations;
-  state.studyPlan = data.studyPlan;
+async function loadBootstrap(showLoading = false) {
+  if (showLoading) setStatusLoading("Loading saved workspace...");
+  const data = await api("/api/bootstrap");
+  Object.assign(state, data);
+  state.authUser = data.profile;
+  state.filteredCourses = null;
+  state.selectedForumId = state.selectedForumId || state.forums[0]?.id || null;
   renderChrome();
+  renderRoute();
+}
+
+async function loadRecommendations() {
+  const data = await api("/api/recommendations");
+  state.recommendations = data.recommendations || [];
+  state.upcomingTasks = data.upcomingTasks || [];
+  state.suggestedTasks = data.suggestedTasks || [];
+  state.studyPlan = data.studyPlan || [];
 }
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
+    credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
       ...(options.headers || {})
     },
     ...options
   });
-  const payload = await response.json();
+  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || "DRISHTI backend request failed");
+    const error = new Error(payload.error || "DRISHTI backend request failed");
+    error.status = response.status;
+    error.code = payload.code;
+    error.payload = payload;
+    throw error;
   }
   return payload;
+}
+
+async function runAction(action) {
+  try {
+    await action();
+  } catch (error) {
+    handleApiError(error);
+  }
+}
+
+function handleApiError(error) {
+  if (error.code === "SETUP_REQUIRED") {
+    renderSetup(error.message);
+    return;
+  }
+  if (error.status === 401) {
+    resetWorkspace();
+    renderAuth();
+    showNotice("Please sign in again.", "notice");
+    return;
+  }
+  showNotice(error.message || "Something went wrong.", "notice");
+}
+
+function resetWorkspace() {
+  Object.assign(state, {
+    authUser: null,
+    profile: null,
+    courses: [],
+    filteredCourses: null,
+    recommendations: [],
+    tasks: [],
+    upcomingTasks: [],
+    suggestedTasks: [],
+    forums: [],
+    groups: [],
+    resources: [],
+    offlinePacks: [],
+    analytics: null,
+    leaderboard: [],
+    studyPlan: [],
+    selectedForumId: null
+  });
 }
 
 function renderChrome() {
   renderProfile();
   renderStatusStrip();
   setActiveNav();
+  logoutButton.hidden = !state.profile;
 }
 
 function renderProfile() {
-  if (!state.profile) return;
+  if (!state.profile) {
+    profileCard.innerHTML = `
+      <h2>Welcome</h2>
+      <p>Sign in or create an account to use DRISHTI.</p>
+    `;
+    return;
+  }
+
   profileCard.innerHTML = `
     <h2>${escapeHtml(state.profile.name)}</h2>
-    <p>${escapeHtml(state.profile.grade)} - ${escapeHtml(state.profile.district)}</p>
-    <p>${escapeHtml(state.profile.languages.join(", "))}</p>
+    <p>${escapeHtml(state.profile.grade || "Learner")} - ${escapeHtml(state.profile.district || "No district saved")}</p>
+    <p>${escapeHtml(state.profile.languages.join(", ") || "English")}</p>
     <div class="profile-metrics">
-      <span>${state.analytics?.totals?.xp || state.profile.xp}<small>XP earned</small></span>
-      <span>${state.profile.streak}<small>day streak</small></span>
+      <span>${state.analytics?.totals?.xp || 0}<small>XP earned</small></span>
+      <span>${state.profile.streak || 0}<small>day streak</small></span>
     </div>
   `;
 }
 
 function renderStatusStrip() {
   const totals = state.analytics?.totals || {};
-  const synced = state.platforms.filter((platform) => platform.status === "synced").length;
   statusStrip.innerHTML = `
+    <div><b>${totals.pendingTasks || 0}</b><span>Pending tasks</span></div>
     <div><b>${totals.completedCourses || 0}</b><span>Courses completed</span></div>
-    <div><b>${state.offlinePacks.length}</b><span>Offline packs ready</span></div>
-    <div><b>${synced}/${state.platforms.length}</b><span>Platform APIs synced</span></div>
-    <div><b>${totals.studyGroups || 0}</b><span>Active study groups</span></div>
+    <div><b>${state.offlinePacks.length || 0}</b><span>Offline packs</span></div>
+    <div><b>${totals.studyGroups || 0}</b><span>Study groups</span></div>
+  `;
+}
+
+function renderAuth() {
+  pageTitle.textContent = state.authMode === "login" ? "Sign in" : "Create account";
+  logoutButton.hidden = true;
+  setActiveNav();
+  profileCard.innerHTML = `
+    <h2>DRISHTI Account</h2>
+    <p>Your learning data is saved only after you sign in.</p>
+  `;
+  statusStrip.innerHTML = `
+    <div><b>1</b><span>Account</span></div>
+    <div><b>2</b><span>Profile</span></div>
+    <div><b>3</b><span>Tasks</span></div>
+    <div><b>4</b><span>Recommendations</span></div>
+  `;
+  appView.innerHTML = authTemplate();
+}
+
+function renderSetup(message) {
+  state.setupError = message;
+  pageTitle.textContent = "Database setup";
+  logoutButton.hidden = true;
+  profileCard.innerHTML = `
+    <h2>Setup needed</h2>
+    <p>DRISHTI is refusing to fake user data.</p>
+  `;
+  statusStrip.innerHTML = `
+    <div><b>DB</b><span>Postgres required</span></div>
+    <div><b>Auth</b><span>Session table required</span></div>
+    <div><b>Data</b><span>Migrations required</span></div>
+    <div><b>Live</b><span>No demo fallback</span></div>
+  `;
+  appView.innerHTML = `
+    <section class="panel setup-panel">
+      <p class="eyebrow">Real backend required</p>
+      <h2>${escapeHtml(message || "Connect a Postgres database to continue.")}</h2>
+      <p class="muted">DRISHTI now stores accounts, sessions, tasks, course progress, forums, groups, and messages in Postgres. Without a database URL, the app will not pretend to work.</p>
+      <div class="setup-steps">
+        <div><strong>1. Add Postgres</strong><span class="muted">Create a Neon Postgres database from Vercel Marketplace or use your own Postgres instance.</span></div>
+        <div><strong>2. Set DATABASE_URL</strong><span class="muted">Add the pooled connection string to Vercel and to local .env.local.</span></div>
+        <div><strong>3. Run migration</strong><span class="muted">Run npm run db:migrate to create the tables and starter catalog.</span></div>
+      </div>
+    </section>
   `;
 }
 
 function renderRoute() {
+  if (!state.profile) {
+    if (state.setupError) renderSetup(state.setupError);
+    else renderAuth();
+    return;
+  }
+
   const route = currentRoute();
   pageTitle.textContent = routes[route] || "Dashboard";
   setActiveNav();
 
-  if (!state.profile) {
-    appView.innerHTML = `<div class="panel">Loading...</div>`;
-    return;
-  }
-
-  if (route === "discover") return renderDiscover();
+  if (route === "courses") return renderCourses();
+  if (route === "tasks") return renderTasks();
   if (route === "forums") return renderForums();
   if (route === "groups") return renderGroups();
   if (route === "library") return renderLibrary();
   if (route === "analytics") return renderAnalytics();
+  if (route === "profile") return renderProfilePage();
   if (route === "contact") return renderContact();
   renderDashboard();
 }
@@ -147,8 +293,98 @@ function currentRoute() {
 function setActiveNav() {
   const route = currentRoute();
   document.querySelectorAll(".app-nav a").forEach((link) => {
-    link.classList.toggle("active", link.dataset.route === route);
+    link.classList.toggle("active", state.profile && link.dataset.route === route);
   });
+}
+
+function authTemplate() {
+  const isRegister = state.authMode === "register";
+  return `
+    <section class="auth-layout">
+      <div class="auth-panel panel">
+        <p class="eyebrow">${isRegister ? "New account" : "Welcome back"}</p>
+        <h2>${isRegister ? "Create your learner workspace." : "Continue your saved learning path."}</h2>
+        <form id="authForm" class="form-grid">
+          <input type="hidden" name="mode" value="${state.authMode}" />
+          ${isRegister ? `
+            <div class="field full-row">
+              <label for="authName">Name</label>
+              <input id="authName" name="name" autocomplete="name" required />
+            </div>
+          ` : ""}
+          <div class="field full-row">
+            <label for="authEmail">Email</label>
+            <input id="authEmail" name="email" type="email" autocomplete="email" required />
+          </div>
+          <div class="field full-row">
+            <label for="authPassword">Password</label>
+            <input id="authPassword" name="password" type="password" autocomplete="${isRegister ? "new-password" : "current-password"}" minlength="8" required />
+          </div>
+          ${isRegister ? registerProfileFields() : ""}
+          <div class="field full-row">
+            <button class="button" type="submit">${isRegister ? "Create account" : "Sign in"}</button>
+          </div>
+        </form>
+        <div class="auth-switch">
+          <button class="ghost small" data-auth-mode="${isRegister ? "login" : "register"}" type="button">
+            ${isRegister ? "I already have an account" : "Create a new account"}
+          </button>
+        </div>
+      </div>
+      <div class="panel">
+        <p class="eyebrow">Stored for real</p>
+        <h2>No temporary learner profile.</h2>
+        <p class="muted">Your account creates database rows for the user, session, first task, progress, and future recommendations.</p>
+      </div>
+    </section>
+  `;
+}
+
+function registerProfileFields() {
+  return `
+    <div class="field">
+      <label for="authGrade">Grade or role</label>
+      <input id="authGrade" name="grade" placeholder="Class 11, Teacher, Mentor" />
+    </div>
+    <div class="field">
+      <label for="authDistrict">District</label>
+      <input id="authDistrict" name="district" placeholder="Cuttack" />
+    </div>
+    <div class="field">
+      <label for="authLevel">Level</label>
+      <select id="authLevel" name="level">
+        <option>Beginner</option>
+        <option>Intermediate</option>
+        <option>All Levels</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="authPace">Pace</label>
+      <select id="authPace" name="pace">
+        <option>Gentle</option>
+        <option selected>Balanced</option>
+        <option>Fast</option>
+      </select>
+    </div>
+    <div class="field full-row">
+      <label for="authLanguages">Languages</label>
+      <input id="authLanguages" name="languages" placeholder="English, Hindi, Odia" />
+    </div>
+    <div class="field full-row">
+      <label for="authGoals">Goals</label>
+      <input id="authGoals" name="goals" placeholder="AI, Mathematics, Peer Teaching" />
+    </div>
+    <div class="field full-row">
+      <label for="authInterests">Interests</label>
+      <input id="authInterests" name="interests" placeholder="Projects, Exam Prep, Career" />
+    </div>
+    <div class="field full-row checkbox-field">
+      <label>
+        <input name="offlineFirst" type="checkbox" />
+        Prioritize offline-ready learning
+      </label>
+    </div>
+  `;
 }
 
 function renderDashboard() {
@@ -159,22 +395,27 @@ function renderDashboard() {
         <section class="panel">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Unified learning path</p>
-              <h2>Start where your profile points.</h2>
+              <p class="eyebrow">Upcoming tasks</p>
+              <h2>Do the next useful thing.</h2>
             </div>
-            <button class="button small" data-action="refresh-plan" type="button">Refresh plan</button>
+            <a class="ghost small" href="#tasks">Manage tasks</a>
           </div>
-          <div class="course-grid" id="dashboardCourses"></div>
+          <div class="task-list">
+            ${state.upcomingTasks.length ? state.upcomingTasks.slice(0, 4).map(taskTemplate).join("") : emptyState("No pending tasks. Add one or enroll in a course.")}
+          </div>
         </section>
 
         <section class="panel">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Personalization engine</p>
-              <h2>Tune your learner profile.</h2>
+              <p class="eyebrow">Course recommendations</p>
+              <h2>Based on saved profile and progress.</h2>
             </div>
+            <a class="ghost small" href="#courses">View catalog</a>
           </div>
-          ${profileForm()}
+          <div class="course-grid">
+            ${topRecommendations.length ? topRecommendations.map(courseCard).join("") : emptyState("No courses found. Run the migration to seed the catalog.")}
+          </div>
         </section>
       </div>
 
@@ -183,43 +424,42 @@ function renderDashboard() {
           <img src="/assets/drishti-logo.png" alt="DRISHTI vision of opportunities" />
           <div>
             <p class="eyebrow">Vision of opportunities</p>
-            <h2>Peer teaching with intelligent access.</h2>
+            <h2>Learning records that stay with the learner.</h2>
           </div>
         </section>
 
         <section class="panel">
-          <p class="eyebrow">Three-week sprint</p>
-          <h2>Your study plan</h2>
+          <p class="eyebrow">Suggested tasks</p>
+          <h2>Recommended next steps</h2>
+          <div class="suggestion-list">
+            ${state.suggestedTasks.length ? state.suggestedTasks.map(suggestedTaskTemplate).join("") : emptyState("No extra suggestions right now.")}
+          </div>
+        </section>
+
+        <section class="panel">
+          <p class="eyebrow">Daily plan</p>
+          <h2>Three focused moves</h2>
           <div class="plan-list">
-            ${state.studyPlan.map(planItemTemplate).join("")}
-          </div>
-        </section>
-
-        <section class="panel">
-          <p class="eyebrow">Peer motivation</p>
-          <h2>Leaderboard</h2>
-          <div class="leaderboard">
-            ${state.leaderboard.slice(0, 5).map(leaderboardTemplate).join("")}
+            ${state.studyPlan.length ? state.studyPlan.map(planItemTemplate).join("") : emptyState("Your plan appears after tasks or courses are available.")}
           </div>
         </section>
       </div>
     </div>
   `;
-  renderCourseCards("#dashboardCourses", topRecommendations);
 }
 
-function renderDiscover() {
-  const courses = state.filteredCourses || state.recommendations;
+function renderCourses() {
+  const courses = state.filteredCourses || state.courses;
   appView.innerHTML = `
     <section class="panel">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">API resource layer</p>
-          <h2>Search across connected platforms.</h2>
+          <p class="eyebrow">Course catalog</p>
+          <h2>Find a path and save progress.</h2>
         </div>
       </div>
       <form class="filter-bar" id="courseFilterForm">
-        <input name="query" type="search" placeholder="Search AI, math, science, peer teaching" />
+        <input name="query" type="search" placeholder="Search AI, math, science, teaching" />
         <select name="level" aria-label="Level">
           <option value="">Any level</option>
           <option>Beginner</option>
@@ -229,8 +469,8 @@ function renderDiscover() {
         <select name="language" aria-label="Language">
           <option value="">Any language</option>
           <option>English</option>
-          <option>Odia</option>
           <option>Hindi</option>
+          <option>Odia</option>
         </select>
         <select name="mode" aria-label="Mode">
           <option value="">Any mode</option>
@@ -238,10 +478,61 @@ function renderDiscover() {
         </select>
         <button class="button" type="submit">Apply</button>
       </form>
-      <div class="course-grid" id="discoverCourses"></div>
+      <div class="course-grid">
+        ${courses.length ? courses.map(courseCard).join("") : emptyState("No courses matched this search.")}
+      </div>
     </section>
   `;
-  renderCourseCards("#discoverCourses", courses);
+}
+
+function renderTasks() {
+  const pending = state.tasks.filter((task) => task.status !== "done");
+  const done = state.tasks.filter((task) => task.status === "done");
+  appView.innerHTML = `
+    <div class="view-grid">
+      <section class="panel">
+        <p class="eyebrow">Your tasks</p>
+        <h2>Save real work with due dates.</h2>
+        <form id="taskForm" class="form-grid">
+          <div class="field full-row">
+            <label for="taskTitle">Task</label>
+            <input id="taskTitle" name="title" placeholder="Finish algebra practice set" required />
+          </div>
+          <div class="field full-row">
+            <label for="taskDescription">Notes</label>
+            <textarea id="taskDescription" name="description" placeholder="What does done look like?"></textarea>
+          </div>
+          <div class="field">
+            <label for="taskDue">Due date</label>
+            <input id="taskDue" name="dueAt" type="datetime-local" />
+          </div>
+          <div class="field">
+            <label for="taskPriority">Priority</label>
+            <select id="taskPriority" name="priority">
+              <option value="1">Normal</option>
+              <option value="2">High</option>
+              <option value="3">Urgent</option>
+            </select>
+          </div>
+          <div class="field full-row">
+            <button class="button" type="submit">Add task</button>
+          </div>
+        </form>
+      </section>
+      <section>
+        <div class="panel">
+          <p class="eyebrow">Pending</p>
+          <h2>Upcoming</h2>
+          <div class="task-list">${pending.length ? pending.map(taskTemplate).join("") : emptyState("No pending tasks.")}</div>
+        </div>
+        <div class="panel">
+          <p class="eyebrow">Completed</p>
+          <h2>Finished work</h2>
+          <div class="task-list">${done.length ? done.slice(0, 8).map(taskTemplate).join("") : emptyState("No completed tasks yet.")}</div>
+        </div>
+      </section>
+    </div>
+  `;
 }
 
 function renderForums() {
@@ -249,19 +540,19 @@ function renderForums() {
   appView.innerHTML = `
     <div class="forum-layout">
       <section class="panel">
-        <p class="eyebrow">Subject-specific forums</p>
+        <p class="eyebrow">Peer forum</p>
         <h2>Ask, explain, and support peers.</h2>
-        <p class="muted">Each post creates a learning event so collaboration counts toward progress.</p>
+        <p class="muted">Posts are stored in the database and count toward learning activity.</p>
         <div class="tag-row">
           ${state.forums.map((forum) => `
             <button class="ghost small" data-forum-select="${escapeHtml(forum.id)}" type="button">${escapeHtml(forum.subject)}</button>
           `).join("")}
         </div>
-        <form id="forumPostForm" class="panel" style="margin-top: 1rem;">
+        <form id="forumPostForm" class="composer">
           <input type="hidden" name="forumId" value="${escapeHtml(selectedForum?.id || "")}" />
           <div class="field">
             <label for="forumText">New question or explanation</label>
-            <textarea id="forumText" name="text" placeholder="Share a doubt, explanation, or peer teaching prompt"></textarea>
+            <textarea id="forumText" name="text" placeholder="Share a doubt, explanation, or peer teaching prompt" required></textarea>
           </div>
           <div class="form-actions">
             <button class="button" type="submit">Post to forum</button>
@@ -272,13 +563,13 @@ function renderForums() {
       <section class="panel">
         <div class="section-heading">
           <div>
-            <p class="eyebrow">${escapeHtml(selectedForum?.members || 0)} members</p>
+            <p class="eyebrow">${escapeHtml(selectedForum?.members || 0)} contributors</p>
             <h2>${escapeHtml(selectedForum?.subject || "Forum")}</h2>
           </div>
         </div>
         <p class="muted">${escapeHtml(selectedForum?.description || "")}</p>
         <div class="forum-list">
-          ${(selectedForum?.posts || []).map(postTemplate).join("")}
+          ${(selectedForum?.posts || []).length ? selectedForum.posts.map(postTemplate).join("") : emptyState("No posts yet. Start the first thread.")}
         </div>
       </section>
     </div>
@@ -289,13 +580,12 @@ function renderGroups() {
   appView.innerHTML = `
     <div class="group-layout">
       <section class="panel">
-        <p class="eyebrow">Collaborative study groups</p>
-        <h2>Form circles around goals.</h2>
-        <p class="muted">Shared documents, group progress, and mentor support make peer teaching concrete.</p>
+        <p class="eyebrow">Study groups</p>
+        <h2>Build a circle around a goal.</h2>
         <form id="groupForm" class="form-grid">
           <div class="field">
             <label for="groupName">Group name</label>
-            <input id="groupName" name="name" placeholder="Example: Biology Sprint" required />
+            <input id="groupName" name="name" placeholder="Biology Sprint" required />
           </div>
           <div class="field">
             <label for="groupSubject">Subject</label>
@@ -316,7 +606,7 @@ function renderGroups() {
       </section>
 
       <section class="group-list">
-        ${state.groups.map(groupTemplate).join("")}
+        ${state.groups.length ? state.groups.map(groupTemplate).join("") : emptyState("No study groups yet.")}
       </section>
     </div>
   `;
@@ -327,13 +617,12 @@ function renderLibrary() {
   appView.innerHTML = `
     <div class="library-layout">
       <section class="panel">
-        <p class="eyebrow">Multilingual and offline access</p>
-        <h2>Prepare learning packs for low connectivity.</h2>
-        <p class="muted">The backend records every pack, expiry, selected language, and saved resource event.</p>
+        <p class="eyebrow">Offline packs</p>
+        <h2>Prepare a manifest for low connectivity.</h2>
         <form id="offlinePackForm" class="form-grid">
           <div class="field">
             <label for="courseId">Course</label>
-            <select id="courseId" name="courseId">
+            <select id="courseId" name="courseId" required>
               ${offlineCourses.map((course) => `<option value="${escapeHtml(course.id)}">${escapeHtml(course.title)}</option>`).join("")}
             </select>
           </div>
@@ -351,17 +640,17 @@ function renderLibrary() {
 
       <section>
         <div class="panel">
-          <p class="eyebrow">Ready packs</p>
-          <h2>Download queue</h2>
+          <p class="eyebrow">Saved packs</p>
+          <h2>Download manifests</h2>
           <div class="resource-list">
-            ${state.offlinePacks.length ? state.offlinePacks.map(packTemplate).join("") : `<div class="notice">No packs yet. Build one from an offline-ready course.</div>`}
+            ${state.offlinePacks.length ? state.offlinePacks.map(packTemplate).join("") : emptyState("No offline packs yet.")}
           </div>
         </div>
         <div class="panel">
-          <p class="eyebrow">Resource cache</p>
-          <h2>Offline resources</h2>
+          <p class="eyebrow">Resources</p>
+          <h2>Available offline resources</h2>
           <div class="resource-list">
-            ${state.resources.map(resourceTemplate).join("")}
+            ${state.resources.length ? state.resources.map(resourceTemplate).join("") : emptyState("No resources found.")}
           </div>
         </div>
       </section>
@@ -371,26 +660,26 @@ function renderLibrary() {
 
 function renderAnalytics() {
   const analytics = state.analytics;
-  const maxXp = Math.max(1, ...analytics.daily.map((day) => day.xp));
+  const maxXp = Math.max(1, ...(analytics?.daily || []).map((day) => day.xp));
   appView.innerHTML = `
     <div class="analytics-layout">
       <section>
         <div class="metric-grid">
-          ${metricTemplate("Total XP", analytics.totals.xp)}
-          ${metricTemplate("Completed", analytics.totals.completedCourses)}
-          ${metricTemplate("Forum posts", analytics.totals.forumPosts)}
-          ${metricTemplate("Resources", analytics.totals.savedResources)}
+          ${metricTemplate("Total XP", analytics?.totals?.xp || 0)}
+          ${metricTemplate("Completed tasks", analytics?.totals?.completedTasks || 0)}
+          ${metricTemplate("Completed courses", analytics?.totals?.completedCourses || 0)}
+          ${metricTemplate("Forum posts", analytics?.totals?.forumPosts || 0)}
         </div>
         <div class="panel">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Learning analytics</p>
-              <h2>Weekly activity</h2>
+              <p class="eyebrow">Learning activity</p>
+              <h2>Weekly XP</h2>
             </div>
             <button class="button small" data-action="refresh-analytics" type="button">Refresh</button>
           </div>
           <div class="chart">
-            ${analytics.daily.map((day) => `
+            ${(analytics?.daily || []).map((day) => `
               <div class="bar">
                 <span>${day.xp} XP</span>
                 <div class="bar-fill" style="height:${Math.max(8, Math.round((day.xp / maxXp) * 145))}px"></div>
@@ -403,26 +692,28 @@ function renderAnalytics() {
 
       <section>
         <div class="panel">
-          <p class="eyebrow">Achievements</p>
-          <h2>Badges unlocked</h2>
+          <p class="eyebrow">Badges</p>
+          <h2>Unlocked from activity</h2>
           <div class="tag-row">
-            ${analytics.badges.length ? analytics.badges.map((badge) => `<span class="pill gold">${escapeHtml(badge)}</span>`).join("") : `<span class="tag">No badges yet</span>`}
+            ${(analytics?.badges || []).length ? analytics.badges.map((badge) => `<span class="pill gold">${escapeHtml(badge)}</span>`).join("") : `<span class="tag">No badges yet</span>`}
           </div>
         </div>
         <div class="panel">
           <p class="eyebrow">Next best action</p>
-          <h2>${escapeHtml(analytics.nextBestAction.title)}</h2>
-          <p class="muted">${escapeHtml(analytics.nextBestAction.description)}</p>
-          <div class="card-actions">
-            <button class="button small complete" data-course-id="${escapeHtml(analytics.nextBestAction.id)}" type="button">Mark complete</button>
-            <button class="ghost small offline" data-course-id="${escapeHtml(analytics.nextBestAction.id)}" type="button">Save offline</button>
-          </div>
+          ${analytics?.nextBestAction ? `
+            <h2>${escapeHtml(analytics.nextBestAction.title)}</h2>
+            <p class="muted">${escapeHtml(analytics.nextBestAction.description)}</p>
+            <div class="card-actions">
+              <button class="button small" data-course-enroll="${escapeHtml(analytics.nextBestAction.id)}" type="button">Enroll</button>
+              <button class="ghost small complete" data-course-id="${escapeHtml(analytics.nextBestAction.id)}" type="button">Mark complete</button>
+            </div>
+          ` : emptyState("Complete your profile to get a next action.")}
         </div>
         <div class="panel">
-          <p class="eyebrow">District momentum</p>
+          <p class="eyebrow">Learner momentum</p>
           <h2>Leaderboard</h2>
           <div class="leaderboard">
-            ${state.leaderboard.map(leaderboardTemplate).join("")}
+            ${state.leaderboard.length ? state.leaderboard.map(leaderboardTemplate).join("") : emptyState("No learner activity yet.")}
           </div>
         </div>
       </section>
@@ -430,21 +721,34 @@ function renderAnalytics() {
   `;
 }
 
+function renderProfilePage() {
+  appView.innerHTML = `
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Learner profile</p>
+          <h2>Keep recommendations grounded.</h2>
+        </div>
+      </div>
+      ${profileForm()}
+    </section>
+  `;
+}
+
 function renderContact() {
   appView.innerHTML = `
     <div class="view-grid">
       <section class="contact-panel panel">
-        <p class="eyebrow">Pilot, investor, educator, partner</p>
-        <h2>Start a DRISHTI conversation.</h2>
-        <p class="muted">Messages are stored by the backend with interest type and organization context.</p>
+        <p class="eyebrow">Contact</p>
+        <h2>Send a real database-backed message.</h2>
         <form id="contactForm" class="form-grid">
           <div class="field">
             <label for="contactName">Name</label>
-            <input id="contactName" name="name" required />
+            <input id="contactName" name="name" value="${escapeHtml(state.profile.name || "")}" required />
           </div>
           <div class="field">
             <label for="contactEmail">Email</label>
-            <input id="contactEmail" name="email" type="email" required />
+            <input id="contactEmail" name="email" type="email" value="${escapeHtml(state.profile.email || "")}" required />
           </div>
           <div class="field">
             <label for="organization">Organization</label>
@@ -468,17 +772,10 @@ function renderContact() {
           </div>
         </form>
       </section>
-      <section>
-        <div class="panel">
-          <p class="eyebrow">Backend capabilities</p>
-          <h2>What is live in this demo</h2>
-          <div class="timeline-list">
-            <div class="timeline-item"><strong>Recommendations</strong><span class="muted">Scores courses by goals, interests, level, language, social proof, and offline needs.</span></div>
-            <div class="timeline-item"><strong>Collaboration</strong><span class="muted">Forums and groups create persisted activity and XP events.</span></div>
-            <div class="timeline-item"><strong>Access</strong><span class="muted">Offline packs capture course, language, resources, and expiry.</span></div>
-            <div class="timeline-item"><strong>Analytics</strong><span class="muted">Progress, badges, leaderboard, and weekly XP are computed from events.</span></div>
-          </div>
-        </div>
+      <section class="panel">
+        <p class="eyebrow">Stored fields</p>
+        <h2>Contacts table</h2>
+        <p class="muted">Messages include account id when signed in, name, email, organization, interest, message, and created timestamp.</p>
       </section>
     </div>
   `;
@@ -487,6 +784,18 @@ function renderContact() {
 function profileForm() {
   return `
     <form id="profileForm" class="form-grid">
+      <div class="field">
+        <label for="profileName">Name</label>
+        <input id="profileName" name="name" value="${escapeHtml(state.profile.name || "")}" />
+      </div>
+      <div class="field">
+        <label for="profileGrade">Grade or role</label>
+        <input id="profileGrade" name="grade" value="${escapeHtml(state.profile.grade || "")}" />
+      </div>
+      <div class="field">
+        <label for="profileDistrict">District</label>
+        <input id="profileDistrict" name="district" value="${escapeHtml(state.profile.district || "")}" />
+      </div>
       <div class="field">
         <label for="profileLevel">Level</label>
         <select id="profileLevel" name="level">
@@ -500,6 +809,10 @@ function profileForm() {
         </select>
       </div>
       <div class="field full-row">
+        <label for="profileLanguages">Languages</label>
+        <input id="profileLanguages" name="languages" value="${escapeHtml(state.profile.languages.join(", "))}" />
+      </div>
+      <div class="field full-row">
         <label for="profileGoals">Goals</label>
         <input id="profileGoals" name="goals" value="${escapeHtml(state.profile.goals.join(", "))}" />
       </div>
@@ -507,54 +820,80 @@ function profileForm() {
         <label for="profileInterests">Interests</label>
         <input id="profileInterests" name="interests" value="${escapeHtml(state.profile.interests.join(", "))}" />
       </div>
-      <div class="field full-row">
+      <div class="field full-row checkbox-field">
         <label>
           <input name="offlineFirst" type="checkbox" ${state.profile.offlineFirst ? "checked" : ""} />
           Prioritize offline-ready learning
         </label>
       </div>
       <div class="field full-row">
-        <button class="button" type="submit">Save profile and rerank</button>
+        <button class="button" type="submit">Save profile</button>
       </div>
     </form>
   `;
 }
 
-function renderCourseCards(selector, courses) {
-  const container = document.querySelector(selector);
-  if (!container) return;
-  container.innerHTML = "";
-
-  if (!courses.length) {
-    container.innerHTML = `<div class="notice">No courses matched this search. Try a wider filter.</div>`;
-    return;
-  }
-
-  courses.forEach((course) => container.appendChild(courseCard(course)));
+function courseCard(course) {
+  const completed = course.progressStatus === "completed";
+  const status = course.progressStatus ? course.progressStatus.replace("_", " ") : "not enrolled";
+  return `
+    <article class="course-card ${completed ? "completed" : ""}">
+      <div class="course-top">
+        <div>
+          <p class="eyebrow">${escapeHtml(course.provider)}</p>
+          <h3>${escapeHtml(course.title)}</h3>
+        </div>
+        <span class="fit-pill">${course.fit ? `${course.fit}% fit` : escapeHtml(status)}</span>
+      </div>
+      <p class="muted description">${escapeHtml(course.description)}</p>
+      <div class="tag-row">${course.tags.slice(0, 3).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
+      <div class="course-meta">${escapeHtml(course.level)} - ${course.durationHours}h - ${escapeHtml(course.languages.join(", "))}${course.offlineReady ? " - Offline ready" : ""}</div>
+      ${course.reasons ? `<p class="muted reason-line">${escapeHtml(course.reasons.join(" / "))}</p>` : ""}
+      <div class="card-actions">
+        ${completed ? `<span class="pill gold">Completed</span>` : `<button class="button small" data-course-enroll="${escapeHtml(course.id)}" type="button">${course.progressStatus ? "Continue" : "Enroll"}</button>`}
+        ${completed ? "" : `<button class="ghost small complete" data-course-id="${escapeHtml(course.id)}" type="button">Mark complete</button>`}
+        ${course.offlineReady ? `<button class="ghost small offline" data-course-id="${escapeHtml(course.id)}" type="button">Save offline</button>` : ""}
+      </div>
+    </article>
+  `;
 }
 
-function courseCard(course) {
-  const template = document.querySelector("#courseCardTemplate");
-  const node = template.content.firstElementChild.cloneNode(true);
-  node.querySelector(".provider").textContent = course.provider;
-  node.querySelector("h3").textContent = course.title;
-  node.querySelector(".description").textContent = course.description;
-  node.querySelector(".fit-pill").textContent = course.fit ? `${course.fit}% fit` : `${course.rating} rating`;
-  node.querySelector(".tags").innerHTML = course.tags.slice(0, 3).map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("");
-  node.querySelector(".course-meta").textContent = `${course.level} - ${course.durationHours}h - ${course.language.join(", ")}${course.offlineReady ? " - Offline ready" : ""}`;
-  node.querySelector(".complete").dataset.courseId = course.id;
-  node.querySelector(".offline").dataset.courseId = course.id;
-  if (!course.offlineReady) {
-    node.querySelector(".offline").textContent = "Save notes";
-  }
-  return node;
+function taskTemplate(task) {
+  const done = task.status === "done";
+  return `
+    <article class="task-card ${done ? "completed" : ""}">
+      <div>
+        <p class="eyebrow">${escapeHtml(task.source)}${task.dueAt ? ` - Due ${formatDate(task.dueAt)}` : ""}</p>
+        <h3>${escapeHtml(task.title)}</h3>
+        ${task.description ? `<p class="muted">${escapeHtml(task.description)}</p>` : ""}
+      </div>
+      <div class="card-actions">
+        ${done ? `<span class="pill gold">Done</span>` : `<button class="button small" data-complete-task="${escapeHtml(task.id)}" type="button">Complete</button>`}
+      </div>
+    </article>
+  `;
+}
+
+function suggestedTaskTemplate(task, index) {
+  return `
+    <article class="task-card">
+      <div>
+        <p class="eyebrow">Recommendation</p>
+        <h3>${escapeHtml(task.title)}</h3>
+        <p class="muted">${escapeHtml(task.reason || "Useful next step")}</p>
+      </div>
+      <div class="card-actions">
+        <button class="ghost small" data-add-suggested="${index}" type="button">Add to tasks</button>
+      </div>
+    </article>
+  `;
 }
 
 function planItemTemplate(item) {
   return `
     <div class="plan-item">
-      <strong>Week ${item.week}: ${escapeHtml(item.title)}</strong>
-      <span class="muted">${escapeHtml(item.task)} - ${escapeHtml(item.peerAction)} - ${item.expectedXp} XP</span>
+      <strong>Day ${item.day}: ${escapeHtml(item.title)}</strong>
+      <span class="muted">${escapeHtml(item.detail || item.action || "")}</span>
     </div>
   `;
 }
@@ -563,7 +902,7 @@ function leaderboardTemplate(item, index) {
   return `
     <div class="leaderboard-item">
       <strong>${index + 1}. ${escapeHtml(item.name)}</strong>
-      <span class="muted">${escapeHtml(item.district)} - ${item.xp} XP - ${item.streak} day streak</span>
+      <span class="muted">${escapeHtml(item.district || "No district")} - ${item.xp} XP - ${item.completedCourses} courses</span>
     </div>
   `;
 }
@@ -575,9 +914,8 @@ function postTemplate(post) {
       <h3>${escapeHtml(post.text)}</h3>
       <div class="tag-row">
         <span class="pill">${post.likes} likes</span>
-        <span class="tag">${new Date(post.createdAt).toLocaleDateString()}</span>
+        <span class="tag">${formatDate(post.createdAt)}</span>
       </div>
-      ${post.replies.map((reply) => `<div class="reply">${escapeHtml(reply.author)}: ${escapeHtml(reply.text)}</div>`).join("")}
       <div class="card-actions">
         <button class="ghost small" data-like-post="${escapeHtml(post.id)}" type="button">Like</button>
       </div>
@@ -614,7 +952,7 @@ function packTemplate(pack) {
     <article class="resource-card">
       <p class="eyebrow">${escapeHtml(pack.language)} pack</p>
       <h3>${escapeHtml(course?.title || "Offline pack")}</h3>
-      <p class="muted">Ready until ${new Date(pack.expiresAt).toLocaleDateString()} - ${pack.resourceIds.length} resource links</p>
+      <p class="muted">Ready until ${formatDate(pack.expiresAt)} - ${pack.resourceIds.length} resource links</p>
       <div class="card-actions">
         <button class="button small" data-download-pack="${escapeHtml(pack.id)}" type="button">Download manifest</button>
       </div>
@@ -642,17 +980,16 @@ function metricTemplate(label, value) {
 }
 
 async function handleClick(event) {
-  const refreshPlan = event.target.closest("[data-action='refresh-plan']");
-  if (refreshPlan) {
-    await loadRecommendations();
-    renderRoute();
-    showNotice("Recommendations refreshed from your learner profile.", "success");
+  const authModeButton = event.target.closest("[data-auth-mode]");
+  if (authModeButton) {
+    state.authMode = authModeButton.dataset.authMode;
+    renderAuth();
     return;
   }
 
   const refreshAnalytics = event.target.closest("[data-action='refresh-analytics']");
   if (refreshAnalytics) {
-    const data = await api(`/api/analytics?learnerId=${state.profile.id}`);
+    const data = await api("/api/analytics");
     state.analytics = data.analytics;
     state.leaderboard = data.leaderboard;
     renderChrome();
@@ -661,43 +998,76 @@ async function handleClick(event) {
     return;
   }
 
-  const completeButton = event.target.closest(".complete[data-course-id]");
-  if (completeButton) {
-    const courseId = completeButton.dataset.courseId;
-    const data = await api("/api/learning-events", {
-      method: "POST",
-      body: JSON.stringify({
-        learnerId: state.profile.id,
-        type: "course_completed",
-        courseId,
-        xp: 180
-      })
-    });
-    state.analytics = data.analytics;
-    state.leaderboard = data.leaderboard;
+  const completeTask = event.target.closest("[data-complete-task]");
+  if (completeTask) {
+    Object.assign(state, await api(`/api/tasks/${completeTask.dataset.completeTask}/complete`, { method: "POST", body: "{}" }));
     renderChrome();
     renderRoute();
-    showNotice("Course progress saved and analytics updated.", "success");
+    showNotice("Task completed and XP saved.", "success");
+    return;
+  }
+
+  const addSuggested = event.target.closest("[data-add-suggested]");
+  if (addSuggested) {
+    const suggested = state.suggestedTasks[Number(addSuggested.dataset.addSuggested)];
+    if (!suggested) return;
+    Object.assign(state, await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title: suggested.title,
+        description: suggested.reason,
+        courseId: suggested.courseId,
+        priority: suggested.priority || 2,
+        source: "recommendation"
+      })
+    }));
+    renderChrome();
+    renderRoute();
+    showNotice("Suggested task added.", "success");
+    return;
+  }
+
+  const enrollButton = event.target.closest("[data-course-enroll]");
+  if (enrollButton) {
+    Object.assign(state, await api(`/api/courses/${enrollButton.dataset.courseEnroll}/enroll`, {
+      method: "POST",
+      body: JSON.stringify({ status: "enrolled" })
+    }));
+    renderChrome();
+    renderRoute();
+    showNotice("Course saved to your learning path.", "success");
+    return;
+  }
+
+  const completeButton = event.target.closest(".complete[data-course-id]");
+  if (completeButton) {
+    Object.assign(state, await api("/api/learning-events", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "course_completed",
+        courseId: completeButton.dataset.courseId,
+        xp: 180
+      })
+    }));
+    renderChrome();
+    renderRoute();
+    showNotice("Course completion saved.", "success");
     return;
   }
 
   const offlineButton = event.target.closest(".offline[data-course-id]");
   if (offlineButton) {
-    const courseId = offlineButton.dataset.courseId;
-    const data = await api("/api/offline-packs", {
+    Object.assign(state, await api("/api/offline-packs", {
       method: "POST",
       body: JSON.stringify({
-        learnerId: state.profile.id,
-        courseId,
-        resourceIds: state.resources.filter((resource) => resource.offlineReady).slice(0, 2).map((resource) => resource.id),
-        language: state.profile.languages[0]
+        courseId: offlineButton.dataset.courseId,
+        resourceIds: state.resources.filter((resource) => resource.offlineReady).map((resource) => resource.id),
+        language: state.profile.languages[0] || "English"
       })
-    });
-    state.offlinePacks = data.offlinePacks;
-    state.analytics = data.analytics;
+    }));
     renderChrome();
     renderRoute();
-    showNotice("Offline pack created.", "success");
+    showNotice("Offline pack saved.", "success");
     return;
   }
 
@@ -716,21 +1086,18 @@ async function handleClick(event) {
       if (post) post.likes = data.post.likes;
     }
     renderForums();
-    showNotice("Like saved.", "success");
     return;
   }
 
   const joinButton = event.target.closest("[data-join-group]");
   if (joinButton) {
-    const data = await api(`/api/groups/${joinButton.dataset.joinGroup}/join`, {
+    Object.assign(state, await api(`/api/groups/${joinButton.dataset.joinGroup}/join`, {
       method: "POST",
-      body: JSON.stringify({ learnerId: state.profile.id })
-    });
-    state.groups = data.groups;
-    state.analytics = data.analytics;
+      body: "{}"
+    }));
     renderChrome();
     renderGroups();
-    showNotice("Study group joined.", "success");
+    showNotice("Study group membership saved.", "success");
     return;
   }
 
@@ -741,14 +1108,30 @@ async function handleClick(event) {
 }
 
 async function handleSubmit(event) {
+  if (event.target.id === "authForm") {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    const mode = form.get("mode");
+    const payload = Object.fromEntries(form.entries());
+    payload.languages = csvList(form.get("languages"));
+    payload.goals = csvList(form.get("goals"));
+    payload.interests = csvList(form.get("interests"));
+    payload.offlineFirst = form.get("offlineFirst") === "on";
+    await api(`/api/auth/${mode === "register" ? "register" : "login"}`, {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    await loadBootstrap();
+    showNotice(mode === "register" ? "Account created." : "Signed in.", "success");
+    return;
+  }
+
   if (event.target.id === "courseFilterForm") {
     event.preventDefault();
     const form = new FormData(event.target);
-    const params = new URLSearchParams(form);
-    const data = await api(`/api/courses?${params.toString()}`);
+    const data = await api(`/api/courses?${new URLSearchParams(form).toString()}`);
     state.filteredCourses = data.courses;
-    renderDiscover();
-    showNotice("Course filters applied.", "success");
+    renderCourses();
     return;
   }
 
@@ -758,9 +1141,12 @@ async function handleSubmit(event) {
     const data = await api("/api/profile", {
       method: "POST",
       body: JSON.stringify({
-        learnerId: state.profile.id,
+        name: form.get("name"),
+        grade: form.get("grade"),
+        district: form.get("district"),
         level: form.get("level"),
         pace: form.get("pace"),
+        languages: csvList(form.get("languages")),
         goals: csvList(form.get("goals")),
         interests: csvList(form.get("interests")),
         offlineFirst: form.get("offlineFirst") === "on"
@@ -768,47 +1154,58 @@ async function handleSubmit(event) {
     });
     state.profile = data.profile;
     state.analytics = data.analytics;
-    await loadRecommendations();
+    state.recommendations = data.recommendations || state.recommendations;
+    state.studyPlan = data.studyPlan || state.studyPlan;
+    await loadBootstrap();
+    showNotice("Profile saved and recommendations recalculated.", "success");
+    return;
+  }
+
+  if (event.target.id === "taskForm") {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    const dueAt = form.get("dueAt") ? new Date(form.get("dueAt")).toISOString() : null;
+    Object.assign(state, await api("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({
+        title: form.get("title"),
+        description: form.get("description"),
+        dueAt,
+        priority: Number(form.get("priority")),
+        source: "user"
+      })
+    }));
     renderChrome();
-    renderRoute();
-    showNotice("Profile saved and recommendations reranked.", "success");
+    renderTasks();
+    showNotice("Task saved.", "success");
     return;
   }
 
   if (event.target.id === "forumPostForm") {
     event.preventDefault();
     const form = new FormData(event.target);
-    const forumId = form.get("forumId");
-    const data = await api(`/api/forums/${forumId}/posts`, {
+    Object.assign(state, await api(`/api/forums/${form.get("forumId")}/posts`, {
       method: "POST",
-      body: JSON.stringify({
-        learnerId: state.profile.id,
-        text: form.get("text")
-      })
-    });
-    state.forums = state.forums.map((forum) => forum.id === data.forum.id ? data.forum : forum);
-    state.analytics = data.analytics;
+      body: JSON.stringify({ text: form.get("text") })
+    }));
     renderChrome();
     renderForums();
-    showNotice("Forum post published and XP logged.", "success");
+    showNotice("Forum post saved.", "success");
     return;
   }
 
   if (event.target.id === "groupForm") {
     event.preventDefault();
     const form = new FormData(event.target);
-    const data = await api("/api/groups", {
+    Object.assign(state, await api("/api/groups", {
       method: "POST",
       body: JSON.stringify({
-        learnerId: state.profile.id,
         name: form.get("name"),
         subject: form.get("subject"),
         meeting: form.get("meeting"),
         capacity: Number(form.get("capacity"))
       })
-    });
-    state.groups = data.groups;
-    state.analytics = data.analytics;
+    }));
     renderChrome();
     renderGroups();
     showNotice("Study group created.", "success");
@@ -818,20 +1215,17 @@ async function handleSubmit(event) {
   if (event.target.id === "offlinePackForm") {
     event.preventDefault();
     const form = new FormData(event.target);
-    const data = await api("/api/offline-packs", {
+    Object.assign(state, await api("/api/offline-packs", {
       method: "POST",
       body: JSON.stringify({
-        learnerId: state.profile.id,
         courseId: form.get("courseId"),
         language: form.get("language"),
         resourceIds: state.resources.filter((resource) => resource.offlineReady).map((resource) => resource.id)
       })
-    });
-    state.offlinePacks = data.offlinePacks;
-    state.analytics = data.analytics;
+    }));
     renderChrome();
     renderLibrary();
-    showNotice("Offline pack added to the download queue.", "success");
+    showNotice("Offline pack added.", "success");
     return;
   }
 
@@ -855,6 +1249,7 @@ function downloadPack(packId) {
   const manifest = {
     product: "DRISHTI Offline Pack",
     learner: state.profile.name,
+    generatedAt: new Date().toISOString(),
     course,
     resources,
     pack
@@ -883,11 +1278,22 @@ function setStatusLoading(message) {
   statusStrip.innerHTML = `<div>${escapeHtml(message)}</div>`;
 }
 
+function emptyState(message) {
+  return `<div class="empty-state">${escapeHtml(message)}</div>`;
+}
+
 function csvList(value) {
   return String(value || "")
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function formatDate(value) {
+  if (!value) return "No due date";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "No due date";
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function escapeHtml(value) {

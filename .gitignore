@@ -3,3 +3,5 @@ node_modules/
 data/drishti-db.json
 npm-debug.log*
 .vercel
+.env
+.env.local

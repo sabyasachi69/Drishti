@@ -22,14 +22,17 @@
       </div>
       <nav class="app-nav" aria-label="DRISHTI app">
         <a href="#dashboard" data-route="dashboard" class="active">Dashboard</a>
-        <a href="#discover" data-route="discover">Discover</a>
+        <a href="#courses" data-route="courses">Courses</a>
+        <a href="#tasks" data-route="tasks">Tasks</a>
         <a href="#forums" data-route="forums">Peer Forum</a>
         <a href="#groups" data-route="groups">Study Groups</a>
         <a href="#library" data-route="library">Offline Library</a>
         <a href="#analytics" data-route="analytics">Analytics</a>
+        <a href="#profile" data-route="profile">Profile</a>
         <a href="#contact" data-route="contact">Contact</a>
       </nav>
-      <button class="ghost full" id="syncButton" type="button">Sync platform APIs</button>
+      <button class="ghost full" id="refreshButton" type="button">Refresh workspace</button>
+      <button class="ghost full" id="logoutButton" type="button" hidden>Sign out</button>
     </aside>
 
     <main class="main-panel">
@@ -40,7 +43,7 @@
         </div>
         <div class="topbar-actions">
           <a class="button secondary" href="/">Landing Page</a>
-          <button class="button" id="quickPlanButton" type="button">Generate study plan</button>
+          <button class="button" id="quickPlanButton" type="button">Refresh recommendations</button>
         </div>
       </header>
 
@@ -51,25 +54,6 @@
       <section id="appView" class="view" aria-live="polite"></section>
     </main>
   </div>
-
-  <template id="courseCardTemplate">
-    <article class="course-card">
-      <div class="course-top">
-        <div>
-          <p class="eyebrow provider"></p>
-          <h3></h3>
-        </div>
-        <span class="fit-pill"></span>
-      </div>
-      <p class="muted description"></p>
-      <div class="tag-row tags"></div>
-      <div class="course-meta"></div>
-      <div class="card-actions">
-        <button class="button small complete" type="button">Mark complete</button>
-        <button class="ghost small offline" type="button">Save offline</button>
-      </div>
-    </article>
-  </template>
 
   <script src="/drishti-app.js" defer></script>
 </body>

@@ -1,4 +1,4 @@
-const { handleApi } = require("../local-server");
+const { handleApi } = require("../lib/api");
 
 module.exports = async function handler(req, res) {
   const host = req.headers.host || "localhost";
